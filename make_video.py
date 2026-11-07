@@ -33,7 +33,7 @@ Rules:
 - Return ONLY valid JSON with keys: "title" (max 70 characters), "description" (two short paragraphs), "tags" (list of 8 strings), "slides" (list of objects with "heading" and "narration").
 """
     url = ("https://generativelanguage.googleapis.com/v1beta/models/"
-           f"gemini-2.5-flash:generateContent?key={key}")
+           f"gemini-2.0-flash:generateContent?key={key}")
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json"}}
     r = requests.post(url, json=body, timeout=180)
