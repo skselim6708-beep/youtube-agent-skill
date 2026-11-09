@@ -1,2 +1,7 @@
-      - name: Install browser for animations
-        run: python -m playwright install --with-deps chromium
+requests
+edge-tts
+Pillow
+google-api-python-client
+google-auth
+google-auth-oauthlib
+playwright
