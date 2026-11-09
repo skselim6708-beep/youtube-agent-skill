@@ -1,3 +1,4 @@
+
 import os, json, re, datetime, subprocess, asyncio, textwrap, time
 from pathlib import Path
 import requests
@@ -101,11 +102,6 @@ def make_clip(img, audio, out):
           "s=1280x720:fps=25,format=yuv420p")
     subprocess.run(["ffmpeg", "-y", "-i", str(img), "-i", str(audio),
                     "-vf", vf, "-c:v", "libx264", "-c:a", "aac", "-b:a", "160k",
-                    "-t", f"{dur:.2f}", "-shortest", str(out)], check=True)
-    dur = audio_length(audio) + 0.5
-    subprocess.run(["ffmpeg", "-y", "-loop", "1", "-i", str(img), "-i", str(audio),
-                    "-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac",
-                    "-b:a", "160k", "-pix_fmt", "yuv420p",
                     "-t", f"{dur:.2f}", "-shortest", str(out)], check=True)
 
 
