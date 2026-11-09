@@ -14,10 +14,12 @@ jobs:
           python-version: "3.11"
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
       - run: pip install -r requirements.txt
+      - name: Install browser for animations
+        run: python -m playwright install --with-deps chromium
       - name: Make and upload video
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
-          VOICE: en-US-AriaNeural
+          VOICE: en-US-GuyNeural
           PRIVACY: private
         run: python make_video.py
