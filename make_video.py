@@ -1,4 +1,4 @@
-qimport os, json, re, datetime, subprocess, asyncio, textwrap, time
+import os, json, re, datetime, subprocess, asyncio, textwrap, time
 from pathlib import Path
 import requests
 import edge_tts
@@ -22,13 +22,19 @@ def pick_topic():
     return topics[idx]
 
 
-def post_with_retry(url, payload, tries=5):
+def post_with_retry(url, payload, tries=8):
     for attempt in range(tries):
-                  r = requests.post(url, json=payload, timeout=300)
-        if r.status_code not in (429, 500, 502, 503, 504):
+        try:
+            r = requests.post(url, json=payload, timeout=300)
+        except requests.exceptions.RequestException as e:
+            print(f"Request error: {e}")
+            if attempt == tries - 1:
+                raise
+            r = None
+        if r is not None and r.status_code not in (429, 500, 502, 503, 504):
             return r
-        wait = 15 * (2 ** attempt)
-        print(f"Gemini busy ({r.status_code}), retry {attempt + 1}/{tries} in {wait}s")
+        wait = min(15 * (2 ** attempt), 300)
+        print(f"Gemini busy/timeout, retry {attempt + 1}/{tries} in {wait}s")
         time.sleep(wait)
     return r
 
