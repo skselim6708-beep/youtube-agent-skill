@@ -1,4 +1,4 @@
-import os, json, re, datetime, subprocess, asyncio, textwrap
+import os, json, re, datetime, subprocess, asyncio, textwrap, time
 from pathlib import Path
 import requests
 import edge_tts
@@ -22,21 +22,32 @@ def pick_topic():
     return topics[idx]
 
 
+def post_with_retry(url, payload, tries=5):
+    for attempt in range(tries):
+        r = requests.post(url, json=payload, timeout=120)
+        if r.status_code not in (429, 500, 502, 503, 504):
+            return r
+        wait = 15 * (2 ** attempt)
+        print(f"Gemini busy ({r.status_code}), retry {attempt + 1}/{tries} in {wait}s")
+        time.sleep(wait)
+    return r
+
+
 def gemini_script(topic):
     key = os.environ["GEMINI_API_KEY"]
-    prompt = f"""You are writing a 5 to 7 minute educational YouTube script for a faceless personal finance channel aimed at a global audience.
+    prompt = f"""You are writing a 5 to 7 minute educational YouTube script for a faceless personal finance channel aimed at a global English audience.
 Topic: {topic}
 Rules:
 - Accurate, general educational information only. No investment advice, no guaranteed returns, no get-rich claims.
 - Plain English, friendly and clear tone.
 - Split into 8 to 12 slides. Each slide has a heading (max 6 words) and narration (2 to 4 sentences).
-- Return ONLY valid JSON with keys: "title" (max 70 characters), "description" (two short paragraphs), "tags" (list of 8 strings), "slides" (list of objects with "heading" and "narration").
+- Return ONLY valid JSON with keys: "title" (max 70 characters), "description" (two short paragraphs), "tags" (list of 8 short tags), "slides" (list of objects with "heading" and "narration").
 """
     url = ("https://generativelanguage.googleapis.com/v1beta/models/"
            f"gemini-3.8-flash:generateContent?key={key}")
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json"}}
-    r = requests.post(url, json=body, timeout=180)
+    r = post_with_retry(url, body)
     r.raise_for_status()
     text = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     text = re.sub(r"^```(json)?|```$", "", text).strip()
