@@ -10,7 +10,7 @@ from google.auth.transport.requests import Request
 
 WORK = Path("work")
 WORK.mkdir(exist_ok=True)
-VOICE = os.environ.get("VOICE", "en-US-AriaNeural")
+VOICE = os.environ.get("VOICE", "en-US-GuyNeural")
 PRIVACY = os.environ.get("PRIVACY", "private")  # पहले "private" रखें, जाँच के बाद "public"
 W, H = 1280, 720
 
@@ -94,6 +94,14 @@ def audio_length(path):
 
 
 def make_clip(img, audio, out):
+    dur = audio_length(audio) + 0.5
+    frames = int(dur * 25)
+    vf = ("zoompan=z='min(zoom+0.0008,1.12)':"
+          f"d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+          "s=1280x720:fps=25,format=yuv420p")
+    subprocess.run(["ffmpeg", "-y", "-i", str(img), "-i", str(audio),
+                    "-vf", vf, "-c:v", "libx264", "-c:a", "aac", "-b:a", "160k",
+                    "-t", f"{dur:.2f}", "-shortest", str(out)], check=True)
     dur = audio_length(audio) + 0.5
     subprocess.run(["ffmpeg", "-y", "-loop", "1", "-i", str(img), "-i", str(audio),
                     "-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac",
