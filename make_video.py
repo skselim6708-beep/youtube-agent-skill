@@ -1,4 +1,4 @@
-import os, json, re, datetime, subprocess, asyncio, textwrap, time
+qimport os, json, re, datetime, subprocess, asyncio, textwrap, time
 from pathlib import Path
 import requests
 import edge_tts
@@ -24,7 +24,7 @@ def pick_topic():
 
 def post_with_retry(url, payload, tries=5):
     for attempt in range(tries):
-        r = requests.post(url, json=payload, timeout=120)
+                  r = requests.post(url, json=payload, timeout=300)
         if r.status_code not in (429, 500, 502, 503, 504):
             return r
         wait = 15 * (2 ** attempt)
