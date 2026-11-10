@@ -14,7 +14,6 @@ WORK = Path("work")
 WORK.mkdir(exist_ok=True)
 VOICE = os.environ.get("VOICE", "en-US-GuyNeural")
 PRIVACY = os.environ.get("PRIVACY", "private")  # पहले "private" रखें, जाँच के बाद "public"
-# मुफ़्त मॉडल, क्रम से कोशिश होंगे। पहला सफल हो तो बाकी नहीं चलते।
 MODELS = [
     "liquid/lfm-3-1.7b:free",
     "thinkingmachines/inkling-2-small:free",
@@ -51,19 +50,8 @@ def pick_topic():
     return topics[idx]
 
 
-def call_model(model, prompt):
-    key = os.environ["OPENROUTER_API_KEY"]
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
-    body = {"model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 4000}
-    r = requests.post(url, json=body, headers=headers, timeout=180)
-    return r
-
-
-def model_outline(topic):
-    prompt = (
+def build_prompt(topic):
+    return (
         "You are writing an educational YouTube video script for a faceless personal finance "
         "channel aimed at a global English audience.\n"
         "Topic: " + topic + "\n"
@@ -75,41 +63,91 @@ def model_outline(topic):
         "- Each heading is at most 6 words.\n"
         "- Each narration is 3 to 4 sentences.\n"
         "- Each visual is one of: bars, line, coins.\n"
-        "- Return ONLY valid JSON, no markdown, in this exact shape:\n"
+        "- Answer with the JSON only. Do not think out loud. No markdown.\n"
+        "- Return ONLY valid JSON in this exact shape:\n"
         '{"title": "max 70 characters", "description": "two short paragraphs", '
         '"tags": ["8 short tags"], "slides": [{"heading": "...", "narration": "...", "visual": "bars"}]}\n'
     )
-    last_error = ""
+
+
+def extract_text(r):
+    try:
+        data = r.json()
+        msg = data["choices"][0]["message"]
+        content = msg.get("content")
+        if not content or not str(content).strip():
+            return None
+        return str(content).strip()
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
+
+
+def parse_outline(text):
+    text = re.sub(r"^```(json)?|```$", "", text.strip()).strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1:
+        return None
+    try:
+        data = json.loads(text[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict) or not data.get("slides"):
+        return None
+    return data
+
+
+def model_outline(topic):
+    key = os.environ["OPENROUTER_API_KEY"]
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
+    prompt = build_prompt(topic)
+    last_error = "no attempt made"
+
     for model in MODELS:
         for attempt in range(2):
+            body = {"model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 6000}
             try:
-                r = call_model(model, prompt)
+                r = requests.post(url, json=body, headers=headers, timeout=180)
             except requests.exceptions.RequestException as e:
-                last_error = str(e)
-                print("Model " + model + " network error: " + last_error)
+                last_error = model + " network error: " + str(e)
+                print(last_error)
                 time.sleep(10)
                 continue
-            if r.status_code in (401, 403, 404):
-                last_error = model + " HTTP " + str(r.status_code)
-                print("Model " + model + " not usable (HTTP " + str(r.status_code) + "), trying next model")
+
+            code = r.status_code
+            if code in (401, 402, 403, 404):
+                last_error = model + " HTTP " + str(code) + " " + r.text[:200]
+                print("Skipping " + model + ": HTTP " + str(code))
                 break
-            if r.status_code in (429, 500, 502, 503, 504):
-                last_error = model + " HTTP " + str(r.status_code)
-                print("Model " + model + " busy (HTTP " + str(r.status_code) + "), waiting 30s")
+            if code in (429, 500, 502, 503, 504):
+                last_error = model + " HTTP " + str(code)
+                print("Model busy " + model + " (HTTP " + str(code) + "), waiting 30s")
                 time.sleep(30)
                 continue
-            r.raise_for_status()
-            text = r.json()["choices"][0]["message"]["content"].strip()
-            text = re.sub(r"^```(json)?|```$", "", text).strip()
-            try:
-                data = json.loads(text)
-                if data.get("slides"):
-                    print("Using model: " + model)
-                    return data
-                last_error = model + " returned no slides"
-            except json.JSONDecodeError as e:
-                last_error = model + " bad JSON: " + str(e)
+            if code != 200:
+                last_error = model + " HTTP " + str(code) + " " + r.text[:200]
+                print(last_error)
+                break
+
+            text = extract_text(r)
+            if text is None:
+                last_error = model + " returned empty content"
+                print("Empty answer from " + model + ", attempt " + str(attempt + 1))
+                continue
+
+            data = parse_outline(text)
+            if data is None:
+                last_error = model + " returned invalid JSON"
                 print("Bad JSON from " + model + ", attempt " + str(attempt + 1))
+                print("Preview: " + text[:300])
+                continue
+
+            print("Using model: " + model)
+            return data
+
     raise RuntimeError("All models failed. Last error: " + last_error)
 
 
