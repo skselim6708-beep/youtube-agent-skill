@@ -14,7 +14,11 @@ WORK = Path("work")
 WORK.mkdir(exist_ok=True)
 VOICE = os.environ.get("VOICE", "en-US-GuyNeural")
 PRIVACY = os.environ.get("PRIVACY", "private")  # पहले "private" रखें, जाँच के बाद "public"
-MODEL = "thinkingmachines/inkling-2-small:free"
+# मुफ़्त मॉडल, क्रम से कोशिश होंगे। पहला सफल हो तो बाकी नहीं चलते।
+MODELS = [
+    "liquid/lfm-3-1.7b:free",
+    "thinkingmachines/inkling-2-small:free",
+]
 W, H = 1280, 720
 FPS = 25
 DISCLAIMER = ("This video is for general education only. It is not financial advice. "
@@ -47,24 +51,18 @@ def pick_topic():
     return topics[idx]
 
 
-def post_with_retry(url, payload, headers=None, tries=5):
-    last = ""
-    for attempt in range(tries):
-        try:
-            r = requests.post(url, json=payload, headers=headers, timeout=180)
-            if r.status_code not in (429, 500, 502, 503, 504):
-                return r
-            last = "HTTP " + str(r.status_code)
-        except requests.exceptions.RequestException as e:
-            last = str(e)
-        wait = min(15 * (2 ** attempt), 120)
-        print("Model retry " + str(attempt + 1) + "/" + str(tries) + " (" + last + "), waiting " + str(wait) + "s")
-        time.sleep(wait)
-    raise RuntimeError("Model failed after " + str(tries) + " tries: " + last)
+def call_model(model, prompt):
+    key = os.environ["OPENROUTER_API_KEY"]
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
+    body = {"model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 4000}
+    r = requests.post(url, json=body, headers=headers, timeout=180)
+    return r
 
 
 def model_outline(topic):
-    key = os.environ["OPENROUTER_API_KEY"]
     prompt = (
         "You are writing an educational YouTube video script for a faceless personal finance "
         "channel aimed at a global English audience.\n"
@@ -81,23 +79,38 @@ def model_outline(topic):
         '{"title": "max 70 characters", "description": "two short paragraphs", '
         '"tags": ["8 short tags"], "slides": [{"heading": "...", "narration": "...", "visual": "bars"}]}\n'
     )
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
-    body = {"model": MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 4000}
-    for attempt in range(2):
-        r = post_with_retry(url, body, headers=headers)
-        r.raise_for_status()
-        text = r.json()["choices"][0]["message"]["content"].strip()
-        text = re.sub(r"^```(json)?|```$", "", text).strip()
-        try:
-            data = json.loads(text)
-            if data.get("slides"):
-                return data
-        except json.JSONDecodeError as e:
-            print("Bad JSON from model, attempt " + str(attempt + 1) + ": " + str(e))
-    raise RuntimeError("Model did not return valid outline JSON")
+    last_error = ""
+    for model in MODELS:
+        for attempt in range(2):
+            try:
+                r = call_model(model, prompt)
+            except requests.exceptions.RequestException as e:
+                last_error = str(e)
+                print("Model " + model + " network error: " + last_error)
+                time.sleep(10)
+                continue
+            if r.status_code in (401, 403, 404):
+                last_error = model + " HTTP " + str(r.status_code)
+                print("Model " + model + " not usable (HTTP " + str(r.status_code) + "), trying next model")
+                break
+            if r.status_code in (429, 500, 502, 503, 504):
+                last_error = model + " HTTP " + str(r.status_code)
+                print("Model " + model + " busy (HTTP " + str(r.status_code) + "), waiting 30s")
+                time.sleep(30)
+                continue
+            r.raise_for_status()
+            text = r.json()["choices"][0]["message"]["content"].strip()
+            text = re.sub(r"^```(json)?|```$", "", text).strip()
+            try:
+                data = json.loads(text)
+                if data.get("slides"):
+                    print("Using model: " + model)
+                    return data
+                last_error = model + " returned no slides"
+            except json.JSONDecodeError as e:
+                last_error = model + " bad JSON: " + str(e)
+                print("Bad JSON from " + model + ", attempt " + str(attempt + 1))
+    raise RuntimeError("All models failed. Last error: " + last_error)
 
 
 def scene_html(heading, narration, visual):
