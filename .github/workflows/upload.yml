@@ -21,6 +21,7 @@ jobs:
       - name: Make and upload video
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
           VOICE: en-US-GuyNeural
           PRIVACY: private
