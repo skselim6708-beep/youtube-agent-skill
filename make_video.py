@@ -14,7 +14,7 @@ WORK = Path("work")
 WORK.mkdir(exist_ok=True)
 VOICE = os.environ.get("VOICE", "en-US-GuyNeural")
 PRIVACY = os.environ.get("PRIVACY", "private")  # पहले "private" रखें, जाँच के बाद "public"
-MODEL = "gemini-3.8-flash"
+MODEL = "thinkingmachines/inkling-2-small:free"
 W, H = 1280, 720
 FPS = 25
 DISCLAIMER = ("This video is for general education only. It is not financial advice. "
@@ -47,24 +47,24 @@ def pick_topic():
     return topics[idx]
 
 
-def post_with_retry(url, payload, tries=5):
+def post_with_retry(url, payload, headers=None, tries=5):
     last = ""
     for attempt in range(tries):
         try:
-            r = requests.post(url, json=payload, timeout=180)
+            r = requests.post(url, json=payload, headers=headers, timeout=180)
             if r.status_code not in (429, 500, 502, 503, 504):
                 return r
             last = "HTTP " + str(r.status_code)
         except requests.exceptions.RequestException as e:
             last = str(e)
         wait = min(15 * (2 ** attempt), 120)
-        print("Gemini retry " + str(attempt + 1) + "/" + str(tries) + " (" + last + "), waiting " + str(wait) + "s")
+        print("Model retry " + str(attempt + 1) + "/" + str(tries) + " (" + last + "), waiting " + str(wait) + "s")
         time.sleep(wait)
-    raise RuntimeError("Gemini failed after " + str(tries) + " tries: " + last)
+    raise RuntimeError("Model failed after " + str(tries) + " tries: " + last)
 
 
-def gemini_outline(topic):
-    key = os.environ["GEMINI_API_KEY"]
+def model_outline(topic):
+    key = os.environ["OPENROUTER_API_KEY"]
     prompt = (
         "You are writing an educational YouTube video script for a faceless personal finance "
         "channel aimed at a global English audience.\n"
@@ -81,23 +81,23 @@ def gemini_outline(topic):
         '{"title": "max 70 characters", "description": "two short paragraphs", '
         '"tags": ["8 short tags"], "slides": [{"heading": "...", "narration": "...", "visual": "bars"}]}\n'
     )
-    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
-           + MODEL + ":generateContent?key=" + key)
-    body = {"contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json",
-                                 "maxOutputTokens": 4000}}
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
+    body = {"model": MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 4000}
     for attempt in range(2):
-        r = post_with_retry(url, body)
+        r = post_with_retry(url, body, headers=headers)
         r.raise_for_status()
-        text = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        text = r.json()["choices"][0]["message"]["content"].strip()
         text = re.sub(r"^```(json)?|```$", "", text).strip()
         try:
             data = json.loads(text)
             if data.get("slides"):
                 return data
         except json.JSONDecodeError as e:
-            print("Bad JSON from Gemini, attempt " + str(attempt + 1) + ": " + str(e))
-    raise RuntimeError("Gemini did not return valid outline JSON")
+            print("Bad JSON from model, attempt " + str(attempt + 1) + ": " + str(e))
+    raise RuntimeError("Model did not return valid outline JSON")
 
 
 def scene_html(heading, narration, visual):
@@ -224,7 +224,7 @@ def upload(path, title, description, tags):
 def main():
     topic = pick_topic()
     print("Topic:", topic)
-    data = gemini_outline(topic)
+    data = model_outline(topic)
     slides = data["slides"][:10]
     slides.append({"heading": "Disclaimer", "narration": DISCLAIMER, "visual": "bars"})
 
