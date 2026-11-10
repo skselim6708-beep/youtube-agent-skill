@@ -14,7 +14,8 @@ WORK = Path("work")
 WORK.mkdir(exist_ok=True)
 VOICE = os.environ.get("VOICE", "en-US-GuyNeural")
 PRIVACY = os.environ.get("PRIVACY", "private")  # पहले "private" रखें, जाँच के बाद "public"
-MODELS = [
+GEMINI_MODEL = "gemini-3.8-flash"
+OPENROUTER_MODELS = [
     "liquid/lfm-3-1.7b:free",
     "thinkingmachines/inkling-2-small:free",
 ]
@@ -63,23 +64,10 @@ def build_prompt(topic):
         "- Each heading is at most 6 words.\n"
         "- Each narration is 3 to 4 sentences.\n"
         "- Each visual is one of: bars, line, coins.\n"
-        "- Answer with the JSON only. Do not think out loud. No markdown.\n"
-        "- Return ONLY valid JSON in this exact shape:\n"
+        "- Return ONLY valid JSON in this exact shape, no markdown:\n"
         '{"title": "max 70 characters", "description": "two short paragraphs", '
         '"tags": ["8 short tags"], "slides": [{"heading": "...", "narration": "...", "visual": "bars"}]}\n'
     )
-
-
-def extract_text(r):
-    try:
-        data = r.json()
-        msg = data["choices"][0]["message"]
-        content = msg.get("content")
-        if not content or not str(content).strip():
-            return None
-        return str(content).strip()
-    except (ValueError, KeyError, IndexError, TypeError):
-        return None
 
 
 def parse_outline(text):
@@ -97,58 +85,70 @@ def parse_outline(text):
     return data
 
 
-def model_outline(topic):
+def ask_gemini(prompt):
+    key = os.environ["GEMINI_API_KEY"]
+    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+           + GEMINI_MODEL + ":generateContent?key=" + key)
+    body = {"contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json",
+                                 "maxOutputTokens": 6000}}
+    r = requests.post(url, json=body, timeout=180)
+    if r.status_code != 200:
+        print("Gemini HTTP " + str(r.status_code) + ": " + r.text[:200])
+        return None
+    try:
+        text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        print("Gemini gave no text")
+        return None
+    return parse_outline(text)
+
+
+def ask_openrouter(prompt):
     key = os.environ["OPENROUTER_API_KEY"]
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
+    for model in OPENROUTER_MODELS:
+        body = {"model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 6000}
+        try:
+            r = requests.post(url, json=body, headers=headers, timeout=180)
+        except requests.exceptions.RequestException as e:
+            print("OpenRouter network error on " + model + ": " + str(e))
+            continue
+        if r.status_code != 200:
+            print("OpenRouter " + model + " HTTP " + str(r.status_code))
+            continue
+        try:
+            text = r.json()["choices"][0]["message"]["content"]
+        except (ValueError, KeyError, IndexError, TypeError):
+            print("OpenRouter " + model + " gave no text")
+            continue
+        if not text or not str(text).strip():
+            print("OpenRouter " + model + " gave empty text")
+            continue
+        data = parse_outline(str(text))
+        if data is None:
+            print("OpenRouter " + model + " gave invalid JSON")
+            continue
+        print("Using OpenRouter model: " + model)
+        return data
+    return None
+
+
+def get_outline(topic):
     prompt = build_prompt(topic)
-    last_error = "no attempt made"
-
-    for model in MODELS:
-        for attempt in range(2):
-            body = {"model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 6000}
-            try:
-                r = requests.post(url, json=body, headers=headers, timeout=180)
-            except requests.exceptions.RequestException as e:
-                last_error = model + " network error: " + str(e)
-                print(last_error)
-                time.sleep(10)
-                continue
-
-            code = r.status_code
-            if code in (401, 402, 403, 404):
-                last_error = model + " HTTP " + str(code) + " " + r.text[:200]
-                print("Skipping " + model + ": HTTP " + str(code))
-                break
-            if code in (429, 500, 502, 503, 504):
-                last_error = model + " HTTP " + str(code)
-                print("Model busy " + model + " (HTTP " + str(code) + "), waiting 30s")
-                time.sleep(30)
-                continue
-            if code != 200:
-                last_error = model + " HTTP " + str(code) + " " + r.text[:200]
-                print(last_error)
-                break
-
-            text = extract_text(r)
-            if text is None:
-                last_error = model + " returned empty content"
-                print("Empty answer from " + model + ", attempt " + str(attempt + 1))
-                continue
-
-            data = parse_outline(text)
-            if data is None:
-                last_error = model + " returned invalid JSON"
-                print("Bad JSON from " + model + ", attempt " + str(attempt + 1))
-                print("Preview: " + text[:300])
-                continue
-
-            print("Using model: " + model)
+    if os.environ.get("GEMINI_API_KEY"):
+        data = ask_gemini(prompt)
+        if data is not None:
+            print("Using Gemini model: " + GEMINI_MODEL)
             return data
-
-    raise RuntimeError("All models failed. Last error: " + last_error)
+        print("Gemini failed, trying OpenRouter")
+    data = ask_openrouter(prompt)
+    if data is not None:
+        return data
+    raise RuntimeError("No model produced a valid script (Gemini and OpenRouter both failed)")
 
 
 def scene_html(heading, narration, visual):
@@ -275,7 +275,7 @@ def upload(path, title, description, tags):
 def main():
     topic = pick_topic()
     print("Topic:", topic)
-    data = model_outline(topic)
+    data = get_outline(topic)
     slides = data["slides"][:10]
     slides.append({"heading": "Disclaimer", "narration": DISCLAIMER, "visual": "bars"})
 
