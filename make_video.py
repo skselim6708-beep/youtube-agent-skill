@@ -21,26 +21,21 @@ OPENROUTER_MODELS = [
 ]
 W, H = 1280, 720
 FPS = 25
+THREE_URL = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"
 DISCLAIMER = ("This video is for general education only. It is not financial advice. "
               "Speak with a qualified advisor before making financial decisions.")
 
 STYLE = """
-html,body{margin:0;width:1280px;height:720px;background:#121826;color:#fff;
+html,body{margin:0;width:1280px;height:720px;background:#0b1020;color:#fff;
 font-family:DejaVu Sans,Arial,sans-serif;overflow:hidden;position:relative}
-.bar{height:12px;background:#00aa78}
-h1{font-size:58px;margin:60px 80px 16px;max-width:1120px;animation:fade .9s ease-out both}
-p{font-size:28px;line-height:1.4;margin:0 0 0 80px;max-width:520px;color:#d2dce6;animation:fade 1.2s .4s both}
-.art{position:absolute;right:80px;bottom:60px;width:560px;height:300px}
-.chart{display:flex;align-items:flex-end;gap:22px;justify-content:flex-end}
-.col{width:60px;height:0;background:#00aa78;animation:grow 1.2s ease-out forwards}
-.art polyline{fill:none;stroke:#00aa78;stroke-width:8;stroke-linecap:round;
-stroke-dasharray:1400;stroke-dashoffset:1400;animation:draw 2.5s ease-out .5s forwards}
-.coin{position:absolute;top:-80px;width:70px;height:70px;border-radius:50%;background:#f5b841;
-animation:drop 1.4s ease-in forwards}
+#scene{position:absolute;left:0;top:0;width:1280px;height:720px}
+.bar{position:absolute;left:0;top:0;width:1280px;height:12px;background:#00aa78;z-index:2}
+h1{position:absolute;left:80px;top:50px;font-size:56px;margin:0;max-width:1120px;z-index:2;
+text-shadow:0 0 18px rgba(0,255,200,.6);animation:fade .9s ease-out both}
+p{position:absolute;left:80px;bottom:60px;font-size:26px;line-height:1.4;margin:0;max-width:700px;
+color:#d2f5ec;z-index:2;background:rgba(10,20,30,.55);padding:14px 18px;border-radius:10px;
+animation:fade 1.2s .4s both}
 @keyframes fade{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}
-@keyframes grow{to{height:var(--h)}}
-@keyframes draw{to{stroke-dashoffset:0}}
-@keyframes drop{to{transform:translateY(400px)}}
 """
 
 
@@ -63,7 +58,7 @@ def build_prompt(topic):
         "- Make 8 to 10 slides.\n"
         "- Each heading is at most 6 words.\n"
         "- Each narration is 3 to 4 sentences.\n"
-        "- Each visual is one of: bars, line, coins.\n"
+        "- Each visual is one of: bars, line, coins, globe.\n"
         "- Return ONLY valid JSON in this exact shape, no markdown:\n"
         '{"title": "max 70 characters", "description": "two short paragraphs", '
         '"tags": ["8 short tags"], "slides": [{"heading": "...", "narration": "...", "visual": "bars"}]}\n'
@@ -151,35 +146,82 @@ def get_outline(topic):
     raise RuntimeError("No model produced a valid script (Gemini and OpenRouter both failed)")
 
 
+def three_scene_js(visual):
+    # हर visual के लिए एक 3D दृश्य। सब Three.js से बनते हैं।
+    return """
+var scene = new THREE.Scene();
+var camera = new THREE.PerspectiveCamera(45, 1280/720, 0.1, 100);
+camera.position.set(0, 1.2, 9);
+var renderer = new THREE.WebGLRenderer({antialias:true, alpha:true, preserveDrawingBuffer:true});
+renderer.setSize(1280, 720);
+renderer.setClearColor(0x000000, 0);
+document.getElementById('scene').appendChild(renderer.domElement);
+scene.add(new THREE.AmbientLight(0x88ffdd, 0.6));
+var light = new THREE.DirectionalLight(0x00ffcc, 1.0);
+light.position.set(3, 5, 4);
+scene.add(light);
+var group = new THREE.Group();
+scene.add(group);
+var mat = new THREE.MeshPhongMaterial({color:0x00aa78, emissive:0x003322, shininess:80,
+  transparent:true, opacity:0.92});
+var wire = new THREE.MeshBasicMaterial({color:0x00ffcc, wireframe:true, transparent:true, opacity:0.35});
+var visual = '""" + visual + """';
+if (visual === 'coins') {
+  for (var i = 0; i < 7; i++) {
+    var c = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 0.15, 40),
+      new THREE.MeshPhongMaterial({color:0xf5b841, emissive:0x553300, shininess:100}));
+    c.rotation.x = Math.PI / 2;
+    c.position.set(-3 + i * 1.0, Math.sin(i) * 0.6, 0);
+    group.add(c);
+  }
+} else if (visual === 'line' || visual === 'globe') {
+  var g = new THREE.SphereGeometry(2.2, 32, 32);
+  var s = new THREE.Mesh(g, mat);
+  var w = new THREE.Mesh(new THREE.SphereGeometry(2.25, 24, 24), wire);
+  group.add(s);
+  group.add(w);
+} else {
+  var heights = [1.0, 1.8, 1.4, 2.6, 2.1, 3.2, 2.8];
+  for (var j = 0; j < heights.length; j++) {
+    var b = new THREE.Mesh(new THREE.BoxGeometry(0.7, heights[j], 0.7), mat);
+    b.position.set(-3 + j * 1.0, heights[j] / 2 - 1.5, 0);
+    group.add(b);
+    var e = new THREE.Mesh(new THREE.BoxGeometry(0.72, heights[j], 0.72), wire);
+    e.position.copy(b.position);
+    group.add(e);
+  }
+}
+var t = 0;
+function animate() {
+  t += 0.02;
+  group.rotation.y = t * 0.6;
+  group.rotation.x = Math.sin(t * 0.5) * 0.15;
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+animate();
+"""
+
+
 def scene_html(heading, narration, visual):
     short = narration
     if len(short) > 260:
         short = short[:257].rsplit(" ", 1)[0] + "..."
-    if visual == "line":
-        art = ('<div class="art"><svg width="560" height="300" viewBox="0 0 560 300">'
-               '<polyline points="0,260 80,220 160,240 240,170 320,190 400,120 480,140 560,40"/>'
-               '</svg></div>')
-    elif visual == "coins":
-        coins = "".join(
-            '<div class="coin" style="left:' + str(x) + 'px;animation-delay:' + str(d) + 's"></div>'
-            for x, d in [(300, 0.0), (380, 0.3), (460, 0.6), (340, 0.9), (420, 1.2), (500, 1.5)])
-        art = '<div class="art">' + coins + '</div>'
-    else:
-        heights = [120, 180, 150, 240, 210, 300, 280]
-        cols = "".join(
-            '<div class="col" style="--h:' + str(h) + 'px;animation-delay:' + str(round(i * 0.15, 2)) + 's"></div>'
-            for i, h in enumerate(heights))
-        art = '<div class="art chart">' + cols + '</div>'
+    js = three_scene_js(visual)
     return ('<!doctype html><html><head><meta charset="utf-8"><style>' + STYLE +
-            '</style></head><body><div class="bar"></div>'
+            '</style><script src="' + THREE_URL + '"></script></head><body>'
+            '<div id="scene"></div>'
+            '<div class="bar"></div>'
             '<h1>' + hl.escape(heading) + '</h1>'
-            '<p>' + hl.escape(short) + '</p>' + art + '</body></html>')
+            '<p>' + hl.escape(short) + '</p>'
+            '<script>' + js + '</script></body></html>')
 
 
 def thumb_html(title):
     return ('<!doctype html><html><head><meta charset="utf-8"><style>' + STYLE +
-            '.big{font-size:84px;font-weight:bold;margin:150px 80px 0;line-height:1.1}'
-            '.sub{font-size:36px;color:#00aa78;margin:30px 80px 0}'
+            '.big{position:absolute;left:80px;top:300px;font-size:84px;font-weight:bold;line-height:1.1;'
+            'text-shadow:0 0 22px rgba(0,255,200,.7)}'
+            '.sub{position:absolute;left:80px;top:500px;font-size:36px;color:#00ffcc}'
             '</style></head><body><div class="bar"></div>'
             '<div class="big">' + hl.escape(title[:60]) + '</div>'
             '<div class="sub">Money Made Simple</div></body></html>')
@@ -293,7 +335,8 @@ def main():
     clips = []
     thumb = WORK / "thumb.png"
     with sync_playwright() as p:
-        browser = p.chromium.launch(args=["--no-sandbox"])
+        browser = p.chromium.launch(args=["--no-sandbox", "--use-gl=swiftshader",
+                                          "--enable-webgl", "--ignore-gpu-blocklist"])
         for i, s in enumerate(slides):
             html_path = slides_dir / (str(i).zfill(2) + ".html")
             html_path.write_text(scene_html(s["heading"], s["narration"], s.get("visual", "bars")),
@@ -303,7 +346,7 @@ def main():
                 webm = record_slide(browser, html_path, durs[i])
                 mux(webm, auds[i], durs[i], clip)
             except Exception as e:
-                print("Slide " + str(i) + " animation failed, using static image: " + str(e))
+                print("Slide " + str(i) + " 3D failed, using static image: " + str(e))
                 img = slides_dir / (str(i).zfill(2) + ".png")
                 make_slide_image(s["heading"], s["narration"], img)
                 static_clip(img, auds[i], durs[i], clip)
